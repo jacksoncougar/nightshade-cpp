@@ -3,7 +3,8 @@
 #
 cmake_minimum_required (VERSION 3.8)
 
-
+find_path(BOOST_ASIO_INCLUDE boost/asio.hpp)
+include_directories(${BOOST_ASIO_INCLUDE})
 # Add source to this project's executable.
 add_executable (nightshade "nightshade.cpp" "nightshade.h")
 

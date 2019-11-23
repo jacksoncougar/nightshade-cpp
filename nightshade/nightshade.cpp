@@ -4,23 +4,75 @@
 #pragma comment(lib, "Cfgmgr32.lib")
 #pragma comment(lib, "Dxva2.lib")
 
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-#include <WinNT.h>
+#include <boost/array.hpp>
+#include <boost/asio.hpp>
+#include <winioctl.h>
 #include <ntddvdeo.h>
-#include <cfgmgr32.h>
-#include <wmistr.h>
 #include <physicalmonitorenumerationapi.h>
+#include <highlevelmonitorconfigurationapi.h>
 #include <lowlevelmonitorconfigurationapi.h>
 #include <vector>
 #include <thread>
 #include <chrono>
-
 #include "nightshade.h"
 
 using namespace std;
+using boost::asio::ip::udp;
+
+boost::asio::io_context io_context;
+	boost::system::error_code error;
+
+	udp::socket udp_socket(io_context);
+boost::array<char, 128> recv_buf;
+std::chrono::system_clock::time_point stime;
+	auto remote_endpoint = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::broadcast(), 4000);
+	auto local_endpoint = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 4000);
+
+	bool found_heart;
+
+void heartbeat(
+	const boost::system::error_code& error, // Result of operation.
+	std::size_t bytes_transferred           // Number of bytes received.
+)
+{
+	auto rtime = (std::chrono::system_clock::time_point*)(recv_buf.data());
+	if (bytes_transferred && *rtime != stime){ 
+		found_heart = true;
+	}
+
+	udp_socket.async_receive_from(
+		boost::asio::buffer(recv_buf), local_endpoint, heartbeat);
+}
+
+void send_heartbeat()
+{	
+	::stime = std::chrono::system_clock::now();
+	boost::array<std::chrono::system_clock::time_point, sizeof(::stime)> send_buf = { ::stime };
+	
+	udp_socket.send_to(boost::asio::buffer(send_buf), remote_endpoint);
+}
 
 int main()
 {
+	udp_socket.open(udp::v4(), error);
+	udp_socket.set_option(boost::asio::socket_base::broadcast(true));
+	udp_socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
+
+
+	udp_socket.bind(local_endpoint);
+
+
+
+
+
+	std::stringstream ss;
+	ss << recv_buf.data();
+
+	auto hWnd = GetConsoleWindow();
+	ShowWindow(hWnd, SW_HIDE);
+
 	auto hShell = FindWindow("Shell_TrayWnd", NULL);
 	HANDLE h = CreateFile("\\\\.\\LCD",
 		GENERIC_READ | GENERIC_WRITE,
@@ -29,10 +81,29 @@ int main()
 		OPEN_EXISTING,
 		0, NULL);
 
-	auto hWnd = GetConsoleWindow();
-	ShowWindow(hWnd, SW_HIDE);
+	if (h == INVALID_HANDLE_VALUE)
+	{
+		auto monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTOPRIMARY);
+		DWORD amount;
+		GetNumberOfPhysicalMonitorsFromHMONITOR(monitor, &amount);
 
-	auto darken = [&h, &hWnd, &hShell]() {
+		PHYSICAL_MONITOR* pMonitors = new PHYSICAL_MONITOR[amount];
+
+
+		if (GetPhysicalMonitorsFromHMONITOR(monitor, amount, pMonitors))
+		{
+			DWORD pdwMonitorCapabilities = 0u;
+			DWORD pdwSupportedColorTemperatures = 0u;
+			bool b3 = GetMonitorCapabilities(pMonitors->hPhysicalMonitor, &pdwMonitorCapabilities, &pdwSupportedColorTemperatures);
+			h = pMonitors->hPhysicalMonitor;
+			delete[] pMonitors;
+		}
+	}
+
+	DWORD current, max;
+	auto supports_hw_power_off = GetVCPFeatureAndVCPFeatureReply(h, 0xD6, nullptr, &current, &max);
+
+	auto darken = [&h, &hWnd, &hShell, &supports_hw_power_off]() {
 		DISPLAY_BRIGHTNESS _displayBrightness{
 		DISPLAYPOLICY_BOTH,
 		0,
@@ -43,17 +114,20 @@ int main()
 
 		DWORD ret = NULL;
 
-		if (!DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS, 
-			(DISPLAY_BRIGHTNESS*)& _displayBrightness, 
+		if (supports_hw_power_off)
+		{
+			SetVCPFeature(h, 0xD6, 0x04); // turn off display
+		}
+		else if (DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
+			(DISPLAY_BRIGHTNESS*)&_displayBrightness,
 			nOutBufferSize, NULL, 0, &ret, NULL))
 		{
-			return false;
+			SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 0x04); // turn off display		
 		}
-		SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
-		SendMessage(hShell, WM_COMMAND, 419, 0);
+		return true;
 	};
 
-	auto lighten = [&h, &hWnd, &hShell]() {
+	auto lighten = [&h, &hWnd, &hShell, &supports_hw_power_off]() {
 		DISPLAY_BRIGHTNESS _displayBrightness{
 		DISPLAYPOLICY_BOTH,
 		100,
@@ -63,19 +137,26 @@ int main()
 		DWORD nOutBufferSize = sizeof(_displayBrightness);
 
 		DWORD ret = NULL;
-
-		if (!DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS, 
-			(DISPLAY_BRIGHTNESS*)& _displayBrightness, 
-			nOutBufferSize, NULL, 0, &ret, NULL))
-		{ 
-			return false;
+		if (supports_hw_power_off)
+		{
+			SetVCPFeature(h, 0xD6, 0x01); // turn on display
 		}
-		SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 1);
-		SendMessage(hShell, WM_COMMAND, 416, 0);
+		else if (DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
+			(DISPLAY_BRIGHTNESS*)&_displayBrightness,
+			nOutBufferSize, NULL, 0, &ret, NULL))
+		{
+			SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 1); // turn on display
+		}
+		return true;
 	};
 
 	while (1)
 	{
+		send_heartbeat();
+		udp_socket.async_receive_from(
+			boost::asio::buffer(recv_buf), local_endpoint, heartbeat);
+		io_context.run();
+
 		lighten();
 		std::this_thread::sleep_for(std::chrono::minutes(20));
 		darken();
