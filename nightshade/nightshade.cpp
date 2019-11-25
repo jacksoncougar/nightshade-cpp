@@ -16,10 +16,18 @@
 #include <vector>
 #include <thread>
 #include <chrono>
+#include <condition_variable>
 #include "nightshade.h"
 
 using namespace std;
 using boost::asio::ip::udp;
+
+std::thread worker;
+
+std::mutex mymutex;
+std::condition_variable mycond;
+
+bool flag = false;
 
 boost::asio::io_context io_context;
 	boost::system::error_code error;
@@ -37,13 +45,15 @@ void heartbeat(
 	std::size_t bytes_transferred           // Number of bytes received.
 )
 {
-	auto rtime = (std::chrono::system_clock::time_point*)(recv_buf.data());
-	if (bytes_transferred && *rtime != stime){ 
+	auto rtime = *(std::chrono::system_clock::time_point*)(recv_buf.data());
+	if (bytes_transferred && rtime != stime){ 
 		found_heart = true;
 	}
 
-	udp_socket.async_receive_from(
-		boost::asio::buffer(recv_buf), local_endpoint, heartbeat);
+	else {
+		return udp_socket.async_receive_from(
+			boost::asio::buffer(recv_buf), local_endpoint, heartbeat);
+	}
 }
 
 void send_heartbeat()
@@ -54,18 +64,74 @@ void send_heartbeat()
 	udp_socket.send_to(boost::asio::buffer(send_buf), remote_endpoint);
 }
 
+auto darken(HANDLE &h, HWND &hWnd, HWND &hShell, bool supports_hw_power_off) {
+	DISPLAY_BRIGHTNESS _displayBrightness{
+	DISPLAYPOLICY_BOTH,
+	0,
+	0
+	};
+
+	DWORD nOutBufferSize = sizeof(_displayBrightness);
+
+	DWORD ret = NULL;
+
+	if (supports_hw_power_off)
+	{
+		SetVCPFeature(h, 0xD6, 0x04); // turn off display
+	}
+	else if (DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
+		(DISPLAY_BRIGHTNESS*)&_displayBrightness,
+		nOutBufferSize, NULL, 0, &ret, NULL))
+	{
+		SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 0x04); // turn off display		
+	}
+	return true;
+};
+
+auto lighten(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_off) {
+	DISPLAY_BRIGHTNESS _displayBrightness{
+	DISPLAYPOLICY_BOTH,
+	100,
+	100
+	};
+
+	DWORD nOutBufferSize = sizeof(_displayBrightness);
+
+	DWORD ret = NULL;
+	if (supports_hw_power_off)
+	{
+		SetVCPFeature(h, 0xD6, 0x01); // turn on display
+	}
+	else if (DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
+		(DISPLAY_BRIGHTNESS*)&_displayBrightness,
+		nOutBufferSize, NULL, 0, &ret, NULL))
+	{
+		SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 1); // turn on display
+	}
+	return true;
+};
+
+auto sheduler(HANDLE h, HWND hWnd, HWND hShell, bool supports_hw_power_off)
+{
+	while (1) {
+		if(!found_heart) send_heartbeat();
+		std::unique_lock<std::mutex> lock(mymutex);
+		lighten(h, hWnd, hShell, supports_hw_power_off);
+		auto exit = mycond.wait_for(lock, std::chrono::minutes(20), []() {return flag; });
+		if (exit) return;
+		darken(h, hWnd, hShell, supports_hw_power_off);
+		mycond.wait_for(lock, std::chrono::minutes(4), []() {return flag; });
+		found_heart = false;
+	}
+}
+
 int main()
 {
 	udp_socket.open(udp::v4(), error);
 	udp_socket.set_option(boost::asio::socket_base::broadcast(true));
 	udp_socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
 
-
 	udp_socket.bind(local_endpoint);
-
-
-
-
 
 	std::stringstream ss;
 	ss << recv_buf.data();
@@ -103,64 +169,33 @@ int main()
 	DWORD current, max;
 	auto supports_hw_power_off = GetVCPFeatureAndVCPFeatureReply(h, 0xD6, nullptr, &current, &max);
 
-	auto darken = [&h, &hWnd, &hShell, &supports_hw_power_off]() {
-		DISPLAY_BRIGHTNESS _displayBrightness{
-		DISPLAYPOLICY_BOTH,
-		0,
-		0
-		};
+	auto task = std::bind(sheduler, h, hWnd, hShell, supports_hw_power_off);
 
-		DWORD nOutBufferSize = sizeof(_displayBrightness);
-
-		DWORD ret = NULL;
-
-		if (supports_hw_power_off)
-		{
-			SetVCPFeature(h, 0xD6, 0x04); // turn off display
-		}
-		else if (DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
-			(DISPLAY_BRIGHTNESS*)&_displayBrightness,
-			nOutBufferSize, NULL, 0, &ret, NULL))
-		{
-			SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 0x04); // turn off display		
-		}
-		return true;
-	};
-
-	auto lighten = [&h, &hWnd, &hShell, &supports_hw_power_off]() {
-		DISPLAY_BRIGHTNESS _displayBrightness{
-		DISPLAYPOLICY_BOTH,
-		100,
-		100
-		};
-
-		DWORD nOutBufferSize = sizeof(_displayBrightness);
-
-		DWORD ret = NULL;
-		if (supports_hw_power_off)
-		{
-			SetVCPFeature(h, 0xD6, 0x01); // turn on display
-		}
-		else if (DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
-			(DISPLAY_BRIGHTNESS*)&_displayBrightness,
-			nOutBufferSize, NULL, 0, &ret, NULL))
-		{
-			SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 1); // turn on display
-		}
-		return true;
-	};
+	worker = std::thread(task);
 
 	while (1)
-	{
-		send_heartbeat();
+	{		
+		if (found_heart)
+		{
+			{
+				std::lock_guard<std::mutex> lock(mymutex);
+				flag = true;
+				mycond.notify_all();
+			}
+			worker.join();
+			// restart
+			flag = false;
+			worker = std::thread(task);
+		}
+		else
+		{
+			flag = false;
+		}
+
 		udp_socket.async_receive_from(
 			boost::asio::buffer(recv_buf), local_endpoint, heartbeat);
 		io_context.run();
-
-		lighten();
-		std::this_thread::sleep_for(std::chrono::minutes(20));
-		darken();
-		std::this_thread::sleep_for(std::chrono::minutes(5));
+		io_context.restart();
 	}
 
 	return 0;
