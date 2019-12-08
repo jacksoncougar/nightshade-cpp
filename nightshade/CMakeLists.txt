@@ -1,14 +1,18 @@
 ﻿# CMakeList.txt : CMake project for nightshade, include source and define
 # project specific logic here.
 #
-cmake_minimum_required (VERSION 3.8)
+cmake_minimum_required (VERSION 3.14)
+set(Boost_USE_STATIC_LIBS   ON)
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT /EHsc")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd /EHsc")
+find_package(Boost REQUIRED)
 
-find_path(BOOST_ASIO_INCLUDE boost/asio.hpp)
-include_directories(${BOOST_ASIO_INCLUDE})
 # Add source to this project's executable.
 add_executable (nightshade "nightshade.cpp" "nightshade.h")
+set_property(TARGET nightshade PROPERTY CXX_STANDARD 17
+PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # TODO: Add tests and install targets if needed.
 
-find_library(ws2_32_LIBRARY_PATH ws2_32)
-target_link_libraries(nightshade ${ws2_32_LIBRARY_PATH})
+target_link_libraries(nightshade 
+PRIVATE Boost::boost )

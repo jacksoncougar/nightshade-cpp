@@ -3,7 +3,7 @@
     {
       "name": "x64-Debug",
       "generator": "Ninja",
-      "configurationType": "Debug",
+      "configurationType": "Release",
       "inheritEnvironments": [ "msvc_x64_x64" ],
       "buildRoot": "${projectDir}\\out\\build\\${name}",
       "installRoot": "${projectDir}\\out\\install\\${name}",
@@ -13,7 +13,12 @@
       "variables": [
         {
           "name": "CMAKE_TOOLCHAIN_FILE",
-          "value": "C:/Users/seed/Documents/GitHub/vcpkg/scripts/buildsystems/vcpkg.cmake",
+          "value": "C:/Users/root/vcpkg/scripts/buildsystems/vcpkg.cmake",
+          "type": "STRING"
+        },
+        {
+          "name": "CMAKE_BUILD_TYPE",
+          "value": "Release",
           "type": "STRING"
         }
       ]
@@ -31,7 +36,7 @@
       "variables": [
         {
           "name": "CMAKE_TOOLCHAIN_FILE",
-          "value": "C:/Users/seed/Documents/GitHub/vcpkg/scripts/buildsystems/vcpkg.cmake",
+          "value": "C:/Users/root/vcpkg/scripts/buildsystems/vcpkg.cmake",
           "type": "STRING"
         }
       ]
