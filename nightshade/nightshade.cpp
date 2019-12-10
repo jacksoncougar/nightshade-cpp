@@ -30,6 +30,7 @@ std::cout << ((std::ostringstream() << std::setw(10) << std::put_time(std::local
 << std::left << x << "\n").str().c_str());\
 } \
 
+using namespace std;
 using boost::asio::ip::udp;
 
 HANDLE timer = CreateWaitableTimer(nullptr, true, nullptr);
@@ -52,7 +53,8 @@ std::chrono::system_clock::time_point stime;
 auto remote_endpoint = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::broadcast(), 4000);
 auto local_endpoint = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 4000);
 
-std::atomic<bool> found_heart;
+std::atomic<bool> found_heart = false;
+std::atomic<bool> suspended = false;
 
 void process_heartbeat(
 	const boost::system::error_code& error, // Result of operation.
@@ -94,23 +96,23 @@ auto darken_screens(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_
 	{
 		log("turn off display power");
 		SetVCPFeature(h, 0xD6, 0x04); // turn off display
+		return false;
 	}
 	else if (DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
-		(DISPLAY_BRIGHTNESS*)& _displayBrightness,
+		(DISPLAY_BRIGHTNESS*)&_displayBrightness,
 		nOutBufferSize, NULL, 0, &ret, NULL))
 	{
 		log("lower brightness & suspend");
-		
-		if (!timer)throw;
-		LARGE_INTEGER span;
 
+		if (!timer)throw;
+
+		LARGE_INTEGER span;
 		auto minutes = [](long long x) { return -x * 60 * 10'000'000ll; };
-		auto seconds = [](long long x) { return -x * 10'000'000ll; };
 		span.QuadPart = minutes(4);
 
 		if (!SetWaitableTimer(timer, &span, 0, nullptr, nullptr, true)) throw;
 		if (GetLastError() == ERROR_NOT_SUPPORTED) throw;
-		
+
 		auto enter_sleep = []() {
 			log("wait on timer");
 			if (WaitForSingleObject(timer, INFINITE) != WAIT_OBJECT_0)
@@ -120,17 +122,19 @@ auto darken_screens(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_
 			}
 			else log("Timer was signaled.\n");
 
-			SetThreadExecutionState(ES_CONTINUOUS); // not needed?
-
+			SetThreadExecutionState(ES_CONTINUOUS);
+			suspended = false;
 			log("awaken");
 		};
 
 		std::thread(enter_sleep).detach();
 
 		if (!SetThreadExecutionState(ES_CONTINUOUS | ES_AWAYMODE_REQUIRED)) throw;
+		suspended = true;
 		SetSuspendState(false, false, false);
+		return true;
 	}
-	return true;
+	return false;
 };
 
 auto brighten_screens(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_off, DWORD max_brightness) {
@@ -166,21 +170,28 @@ auto sheduler(HANDLE h, HWND hWnd, HWND hShell, bool supports_hw_power_off, DWOR
 
 		std::unique_lock<std::mutex> lock(m);
 
+		SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
 		if (!found_heart) send_heartbeat();
 
 		brighten_screens(h, hWnd, hShell, supports_hw_power_off, max_brightness);
 		if (cv.wait_for(lock, std::chrono::minutes(20), []() {return worker_should_terminate; }))
 			return;
-		
-		darken_screens(h, hWnd, hShell, supports_hw_power_off, min_brightness);
-		if (cv.wait_for(lock, std::chrono::minutes(4), []() {return worker_should_terminate; }))
-			return;
 
-		SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
+		// if we slept we don't call wait_for
+		auto will_suspend = darken_screens(h, hWnd, hShell, supports_hw_power_off, min_brightness);
+		if (will_suspend) {
+			log("waiting until computer wakes up")
+				cv.wait(lock, []() { return !suspended.load(); });
+		}
+		else {
+			log("waiting for sleep timer")
+				if (cv.wait_for(lock, std::chrono::minutes(4), []() {return worker_should_terminate; }))
+					return;
+		}
 	}
 }
 
-int main()
+int main(int argc, char* argv[])
 {
 	udp_socket.open(udp::v4(), error);
 	udp_socket.set_option(boost::asio::socket_base::broadcast(true));
