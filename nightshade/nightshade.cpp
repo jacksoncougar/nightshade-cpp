@@ -30,7 +30,6 @@ std::cout << ((std::ostringstream() << std::setw(10) << std::put_time(std::local
 << std::left << x << "\n").str().c_str());\
 } \
 
-using namespace std;
 using boost::asio::ip::udp;
 
 HANDLE timer = CreateWaitableTimer(nullptr, true, nullptr);
@@ -121,7 +120,7 @@ auto darken_screens(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_
 			}
 			else log("Timer was signaled.\n");
 
-			SetThreadExecutionState(ES_CONTINUOUS);
+			SetThreadExecutionState(ES_CONTINUOUS); // not needed?
 
 			log("awaken");
 		};
@@ -167,7 +166,6 @@ auto sheduler(HANDLE h, HWND hWnd, HWND hShell, bool supports_hw_power_off, DWOR
 
 		std::unique_lock<std::mutex> lock(m);
 
-		SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
 		if (!found_heart) send_heartbeat();
 
 		brighten_screens(h, hWnd, hShell, supports_hw_power_off, max_brightness);
@@ -178,7 +176,7 @@ auto sheduler(HANDLE h, HWND hWnd, HWND hShell, bool supports_hw_power_off, DWOR
 		if (cv.wait_for(lock, std::chrono::minutes(4), []() {return worker_should_terminate; }))
 			return;
 
-		
+		SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
 	}
 }
 
@@ -242,6 +240,7 @@ int main()
 	auto should_shutdown = false;
 	while (!should_shutdown)
 	{
+		SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
 		if (found_heart) 
 		{
 			{
