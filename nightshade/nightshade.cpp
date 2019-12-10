@@ -26,7 +26,7 @@
 #define log(x) \
 { \
 time_t  t = std::time(0); \
-OutputDebugString((std::ostringstream() << std::setw(10) << std::put_time(std::localtime(&t), "%H-%M-%S: ") \
+std::cout << ((std::ostringstream() << std::setw(10) << std::put_time(std::localtime(&t), "%H-%M-%S: ") \
 << std::left << x << "\n").str().c_str());\
 } \
 
@@ -36,24 +36,26 @@ using boost::asio::ip::udp;
 HANDLE timer = CreateWaitableTimer(nullptr, true, nullptr);
 
 std::thread worker;
+std::mutex m;
+std::condition_variable cv;
 
-std::mutex mymutex;
-std::condition_variable mycond;
-
-bool flag = false;
+bool worker_should_terminate = false;
 
 boost::asio::io_context io_context;
 boost::system::error_code error;
 
 udp::socket udp_socket(io_context);
+
 boost::array<char, 128> recv_buf;
+
 std::chrono::system_clock::time_point stime;
+
 auto remote_endpoint = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::broadcast(), 4000);
 auto local_endpoint = boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 4000);
 
-bool found_heart;
+std::atomic<bool> found_heart;
 
-void heartbeat(
+void process_heartbeat(
 	const boost::system::error_code& error, // Result of operation.
 	std::size_t bytes_transferred           // Number of bytes received.
 )
@@ -61,74 +63,65 @@ void heartbeat(
 	auto rtime = *(std::chrono::system_clock::time_point*)(recv_buf.data());
 	if (bytes_transferred && rtime != stime) {
 		found_heart = true;
-		log("found_heart");
+		log("found heartbeat");
 	}
-
 	else {
-		return udp_socket.async_receive_from(
-			boost::asio::buffer(recv_buf), local_endpoint, heartbeat);
+		log("heard own heartbeat")
+			return udp_socket.async_receive_from(
+				boost::asio::buffer(recv_buf), local_endpoint, process_heartbeat);
 	}
 }
 
 void send_heartbeat()
 {
-
 	log("send_hearbeat");
+	found_heart = false;
 	::stime = std::chrono::system_clock::now();
 	boost::array<std::chrono::system_clock::time_point, sizeof(::stime)> send_buf = { ::stime };
-
 	udp_socket.send_to(boost::asio::buffer(send_buf), remote_endpoint);
 }
 
-auto darken(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_off) {
-	DISPLAY_BRIGHTNESS _displayBrightness{
-	DISPLAYPOLICY_BOTH,
-	0,
-	0
-	};
-
-
+auto darken_screens(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_off, DWORD min_brightness) {
 	log("darken");
 
-	DWORD nOutBufferSize = sizeof(_displayBrightness);
+	DISPLAY_BRIGHTNESS _displayBrightness{
+		DISPLAYPOLICY_BOTH,	min_brightness, min_brightness
+	};
 
+	DWORD nOutBufferSize = sizeof(_displayBrightness);
 	DWORD ret = NULL;
 
 	if (supports_hw_power_off)
 	{
+		log("turn off display power");
 		SetVCPFeature(h, 0xD6, 0x04); // turn off display
 	}
 	else if (DeviceIoControl(h, IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
 		(DISPLAY_BRIGHTNESS*)& _displayBrightness,
 		nOutBufferSize, NULL, 0, &ret, NULL))
 	{
-		log("suspend");
-		// otehrwise darken the display and suspend the pc. Set wake timer to resume after darken preiod is expired.
+		log("lower brightness & suspend");
+		
 		if (!timer)throw;
 		LARGE_INTEGER span;
 
 		auto minutes = [](long long x) { return -x * 60 * 10'000'000ll; };
 		auto seconds = [](long long x) { return -x * 10'000'000ll; };
-
 		span.QuadPart = minutes(4);
+
 		if (!SetWaitableTimer(timer, &span, 0, nullptr, nullptr, true)) throw;
 		if (GetLastError() == ERROR_NOT_SUPPORTED) throw;
+		
 		auto enter_sleep = []() {
 			log("wait on timer");
 			if (WaitForSingleObject(timer, INFINITE) != WAIT_OBJECT_0)
 			{
-				log("WaitForSingleObject failed (%d)\n")
-					log(GetLastError());
+				log("WaitForSingleObject failed (%d)\n");
+				log(GetLastError());
 			}
 			else log("Timer was signaled.\n");
 
 			SetThreadExecutionState(ES_CONTINUOUS);
-
-			{
-				std::lock_guard<std::mutex> lock(mymutex);
-				flag = true;
-				mycond.notify_all();
-			}
 
 			log("awaken");
 		};
@@ -141,11 +134,11 @@ auto darken(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_off) {
 	return true;
 };
 
-auto lighten(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_off) {
+auto brighten_screens(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_off, DWORD max_brightness) {
 	DISPLAY_BRIGHTNESS _displayBrightness{
 	DISPLAYPOLICY_BOTH,
-	100,
-	100
+	max_brightness,
+	max_brightness
 	};
 
 
@@ -168,20 +161,24 @@ auto lighten(HANDLE& h, HWND& hWnd, HWND& hShell, bool supports_hw_power_off) {
 	return true;
 };
 
-auto sheduler(HANDLE h, HWND hWnd, HWND hShell, bool supports_hw_power_off)
+auto sheduler(HANDLE h, HWND hWnd, HWND hShell, bool supports_hw_power_off, DWORD max_brightness, DWORD min_brightness)
 {
-	while (1) {
+	while (!worker_should_terminate) {
+
+		std::unique_lock<std::mutex> lock(m);
 
 		SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
 		if (!found_heart) send_heartbeat();
-		std::unique_lock<std::mutex> lock(mymutex);
-		lighten(h, hWnd, hShell, supports_hw_power_off);
-		auto exit = mycond.wait_for(lock, std::chrono::minutes(20), []() {return flag; });
-		if (exit) return;
-		darken(h, hWnd, hShell, supports_hw_power_off);
-		mycond.wait_for(lock, std::chrono::minutes(4), []() {return flag; });
-		found_heart = false;
-		flag = false;
+
+		brighten_screens(h, hWnd, hShell, supports_hw_power_off, max_brightness);
+		if (cv.wait_for(lock, std::chrono::minutes(20), []() {return worker_should_terminate; }))
+			return;
+		
+		darken_screens(h, hWnd, hShell, supports_hw_power_off, min_brightness);
+		if (cv.wait_for(lock, std::chrono::minutes(4), []() {return worker_should_terminate; }))
+			return;
+
+		
 	}
 }
 
@@ -190,16 +187,13 @@ int main()
 	udp_socket.open(udp::v4(), error);
 	udp_socket.set_option(boost::asio::socket_base::broadcast(true));
 	udp_socket.set_option(boost::asio::ip::udp::socket::reuse_address(true));
-
 	udp_socket.bind(local_endpoint);
 
-	std::stringstream ss;
-	ss << recv_buf.data();
-
 	auto hWnd = GetConsoleWindow();
-	ShowWindow(hWnd, SW_HIDE);
+	//ShowWindow(hWnd, SW_HIDE);
 
 	auto hShell = FindWindow("Shell_TrayWnd", NULL);
+	
 	HANDLE h = CreateFile("\\\\.\\LCD",
 		GENERIC_READ | GENERIC_WRITE,
 		0,
@@ -207,7 +201,8 @@ int main()
 		OPEN_EXISTING,
 		0, NULL);
 
-	if (h == INVALID_HANDLE_VALUE)
+	auto use_external_monitor = h == INVALID_HANDLE_VALUE;
+	if (use_external_monitor)
 	{
 		auto monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTOPRIMARY);
 		DWORD amount;
@@ -215,12 +210,8 @@ int main()
 
 		PHYSICAL_MONITOR* pMonitors = new PHYSICAL_MONITOR[amount];
 
-
 		if (GetPhysicalMonitorsFromHMONITOR(monitor, amount, pMonitors))
 		{
-			DWORD pdwMonitorCapabilities = 0u;
-			DWORD pdwSupportedColorTemperatures = 0u;
-			bool b3 = GetMonitorCapabilities(monitor, &pdwMonitorCapabilities, &pdwSupportedColorTemperatures);
 			h = pMonitors->hPhysicalMonitor;
 			delete[] pMonitors;
 		}
@@ -228,50 +219,53 @@ int main()
 
 	DWORD current, max;
 	auto supports_hw_power_off = GetVCPFeatureAndVCPFeatureReply(h, 0xD6, nullptr, &current, &max);
+	
+	// Set shutdown privilege for current process
+	{ 
+		auto pid = GetCurrentProcess();
+		HANDLE token;
+		if (!OpenProcessToken(pid, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) throw;
+		LUID luid;
+		LookupPrivilegeValue(nullptr, "SeShutdownPrivilege", &luid);
+		TOKEN_PRIVILEGES priv;
+		priv.PrivilegeCount = 1;
+		priv.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+		priv.Privileges[0].Luid = luid;
 
+		if (!AdjustTokenPrivileges(token, false, &priv, 0, nullptr, nullptr)) throw;
+		CloseHandle(token);
+	}
 
-
-
-	auto pid = GetCurrentProcess();
-	HANDLE token;
-	if (!OpenProcessToken(pid, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) throw;
-	LUID luid;
-	LookupPrivilegeValue(nullptr, "SeShutdownPrivilege", &luid);
-	TOKEN_PRIVILEGES priv;
-	priv.PrivilegeCount = 1;
-	priv.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-	priv.Privileges[0].Luid = luid;
-
-	if (!AdjustTokenPrivileges(token, false, &priv, 0, nullptr, nullptr)) throw;
-	CloseHandle(token);
-
-	auto task = std::bind(sheduler, h, hWnd, hShell, supports_hw_power_off);
-
+	auto task = std::bind(sheduler, h, hWnd, hShell, supports_hw_power_off, max, 0);
 	worker = std::thread(task);
 
-	while (1)
+	auto should_shutdown = false;
+	while (!should_shutdown)
 	{
-		if (found_heart)
+		if (found_heart) 
 		{
 			{
-				std::lock_guard<std::mutex> lock(mymutex);
-				flag = true;
-				mycond.notify_all();
+				log("tell the worker thread to terminate.")
+				std::lock_guard<std::mutex> lock(m);
+				worker_should_terminate = true;
+				cv.notify_all();
 			}
 			worker.join();
-			// restart
-			flag = false;
-			worker = std::thread(task);
+			log("worker thread joined main thread.")
+			{
+				worker_should_terminate = false;
+				worker = std::thread(task);
+			}
 		}
 		else
 		{
-			flag = false;
+			worker_should_terminate = false;
 		}
 
 		udp_socket.async_receive_from(
-			boost::asio::buffer(recv_buf), local_endpoint, heartbeat);
-		io_context.run();
-		io_context.restart();
+			boost::asio::buffer(recv_buf), local_endpoint, process_heartbeat);
+		io_context.run(); // execution on this thread will poll here until a heartbeat is heard...
+		io_context.restart(); 
 	}
 
 	return 0;
