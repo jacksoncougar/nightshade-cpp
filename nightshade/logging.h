@@ -92,4 +92,6 @@ std::string format(std::string format_template, T &&arg, Ts &&... args)
   }
   return ss.str();
 }
+
+
 } // namespace ns

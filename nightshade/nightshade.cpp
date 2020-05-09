@@ -66,11 +66,11 @@ void process_heartbeat(
   if (bytes_transferred && rtime != stime)
   {
     synchronized = true;
-    ns::log("found heartbeat");
+    ns::log("Found new heartbeat.");
   }
   else
   {
-    ns::log("heard own heartbeat");
+    ns::log("Heard own heartbeat.");
     return udp_socket.async_receive_from(
         boost::asio::buffer(recieve_buffer), local_endpoint, process_heartbeat);
   }
@@ -101,12 +101,6 @@ auto darken_screens(
 {
   ns::log(__func__);
 
-  DISPLAY_BRIGHTNESS _displayBrightness{
-      DISPLAYPOLICY_BOTH, min_brightness, min_brightness};
-
-  DWORD nOutBufferSize = sizeof(_displayBrightness);
-  DWORD ret = NULL;
-
   // Screen darkening happens two ways:
   // (1) turn off monitor power, or
   // (2) suspend the OS
@@ -117,22 +111,34 @@ auto darken_screens(
   {
     for (auto monitor : monitors)
     {
+      DISPLAY_BRIGHTNESS _displayBrightness{
+          DISPLAYPOLICY_BOTH, min_brightness, min_brightness};
+
+      DWORD nOutBufferSize = sizeof(_displayBrightness);
+      DWORD ret = NULL;
+
       if (supports_hw_power_off)
       {
-        //# Turn the monitor off.
-        SetVCPFeature(monitor, 0xD6, 0x04);
+        ns::log("Power down display.");
+        constexpr auto VCP_CODE_POWER_MODE = 0xD6;
+        constexpr auto OFF = 0x04;
+        SetVCPFeature(monitor, VCP_CODE_POWER_MODE, OFF);
       }
-      else if (!DeviceIoControl(
-                   monitor,
-                   IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
-                   (DISPLAY_BRIGHTNESS *)&_displayBrightness,
-                   nOutBufferSize,
-                   NULL,
-                   0,
-                   &ret,
-                   NULL))
+      else
       {
-        throw;
+        ns::log("Lowering monitor brightness.");
+        if (!DeviceIoControl(
+                monitor,
+                IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
+                (DISPLAY_BRIGHTNESS *)&_displayBrightness,
+                nOutBufferSize,
+                NULL,
+                0,
+                &ret,
+                NULL))
+        {
+          throw;
+        }
       }
     }
 
@@ -207,27 +213,40 @@ void brighten_screens(
   {
     if (supports_hw_power_off)
     {
-      //# Turn the monitor on.
       constexpr auto VCP_CODE_POWER_MODE = 0xD6;
-      constexpr auto ON = 0xD6;
-      SetVCPFeature(monitor, VCP_CODE_POWER_MODE, ON);
+      constexpr auto ON = 0x01;
+      if (SetVCPFeature(monitor, VCP_CODE_POWER_MODE, ON))
+      {
+        ns::log("Success powering up display.");
+      }
+      else
+      {
+        ns::log("Failure powering up display.");
+      }
     }
-    else if (DWORD ret = NULL, nOutBufferSize = sizeof(_displayBrightness);
-             //# Turn monitor brightness to maximum.
-             DeviceIoControl(
-                 monitor,
-                 IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
-                 (DISPLAY_BRIGHTNESS *)&_displayBrightness,
-                 nOutBufferSize,
-                 NULL,
-                 0,
-                 &ret,
-                 NULL))
+    else
     {
-      //# Turn the monitor on (work-around for laptop monitors turning off when
-      // suspended).
-      constexpr auto POWER_ON = -1;
-      SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
+      if (DWORD ret = NULL, nOutBufferSize = sizeof(_displayBrightness);
+              DeviceIoControl(
+                  monitor,
+                  IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
+                  (DISPLAY_BRIGHTNESS *)&_displayBrightness,
+                  nOutBufferSize,
+                  NULL,
+                  0,
+                  &ret,
+                  NULL))
+      {
+
+        ns::log("Increase display brightness.");
+        //# Turn the monitor on (work-around for laptop monitors turning off
+        // when
+        // suspended).
+
+        ns::log("Power up display.");
+        constexpr auto POWER_ON = -1;
+        SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
+      }
     }
     // else ...???
   }
@@ -312,7 +331,8 @@ bool query_monitors(HMONITOR Arg1, HDC Arg2, LPRECT Arg3, LPARAM Arg4)
 
     bool supports_power_off = false;
     DWORD max;
-    if (DWORD current; supports_power_off = GetVCPFeatureAndVCPFeatureReply(
+    if (DWORD current;
+        supports_power_off = GetVCPFeatureAndVCPFeatureReply(
             pMonitors->hPhysicalMonitor, 0xD6, nullptr, &current, &max))
     {
       ns::log("Supports power control.");
