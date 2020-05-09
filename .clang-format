@@ -1,0 +1,9 @@
+﻿---
+BasedOnStyle: LLVM
+AlignAfterOpenBracket: AlwaysBreak
+BinPackArguments: 'false'
+BinPackParameters: 'false'
+ConstructorInitializerAllOnOneLineOrOnePerLine: 'true'
+BreakBeforeBraces: Allman
+
+...
