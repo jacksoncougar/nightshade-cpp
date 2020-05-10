@@ -66,11 +66,11 @@ void process_heartbeat(
   if (bytes_transferred && rtime != stime)
   {
     synchronized = true;
-    ns::log("Found new heartbeat.");
+    ns::log("Recieved synchronization message.");
   }
   else
   {
-    ns::log("Heard own heartbeat.");
+    ns::log("Recieved my own synchronization message.");
     return udp_socket.async_receive_from(
         boost::asio::buffer(recieve_buffer), local_endpoint, process_heartbeat);
   }
@@ -119,15 +119,19 @@ auto darken_screens(
 
       if (supports_hw_power_off)
       {
-        ns::log("Power down display.");
-        constexpr auto VCP_CODE_POWER_MODE = 0xD6;
-        constexpr auto OFF = 0x04;
-        SetVCPFeature(monitor, VCP_CODE_POWER_MODE, OFF);
+        if (constexpr auto VCP_CODE_POWER_MODE = 0xD6, OFF = 0x04;
+            SetVCPFeature(monitor, VCP_CODE_POWER_MODE, OFF))
+        {
+          ns::log("Success powering down display.");
+        }
+        else
+        {
+          ns::log("Failure powering down display.");
+        }
       }
       else
       {
-        ns::log("Lowering monitor brightness.");
-        if (!DeviceIoControl(
+        if (DeviceIoControl(
                 monitor,
                 IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
                 (DISPLAY_BRIGHTNESS *)&_displayBrightness,
@@ -137,7 +141,11 @@ auto darken_screens(
                 &ret,
                 NULL))
         {
-          throw;
+          ns::log("Lowering monitor brightness.");
+        }
+        else
+        {
+          ns::log("Failure lowering monitor brightness.");
         }
       }
     }
@@ -154,36 +162,31 @@ auto darken_screens(
     if (constexpr auto RUN_ONCE = 0;
         !SetWaitableTimer(timer, &duration, RUN_ONCE, nullptr, nullptr, true))
     {
-      throw;
-    }
-    if (GetLastError() == ERROR_NOT_SUPPORTED)
-    {
-      throw;
+      ns::log("Failure set wait timer (error #{e}).", GetLastError());
     }
 
-    auto wakeup_handler = []() {
+    // Create a new thread to handle wake-up.
+    std::thread([]() {
       ns::log(__func__);
-      if (WaitForSingleObject(timer, INFINITE) != WAIT_OBJECT_0)
+      if (!(WaitForSingleObject(timer, INFINITE) == WAIT_OBJECT_0))
       {
-        throw;
+        ns::log("Failure wait on timer.");
       }
 
       // Wake up laptop monitors
       if (!SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED))
       {
-        throw;
+        ns::log("Failure setting execution state.");
       }
       suspended = false;
-    };
-
-    // Create a new process to handle wake-up event so this thread can call
-    // SetSuspendState.
-    std::thread(wakeup_handler).detach();
+    }).detach();
 
     // Tell OS we need to keep executing in suspended state; attempts to avoid
     // entering deeper sleep states.
     if (!SetThreadExecutionState(ES_CONTINUOUS | ES_AWAYMODE_REQUIRED))
-      throw;
+    {
+      ns::log("Failure setting execution state.");
+    }
 
     suspended = true;
     SetSuspendState(false, false, false);
@@ -200,9 +203,6 @@ void brighten_screens(
     DWORD max_brightness)
 {
   ns::log(__func__);
-
-  DISPLAY_BRIGHTNESS _displayBrightness{
-      DISPLAYPOLICY_BOTH, max_brightness, max_brightness};
 
   // Inform OS that we want to do work during suspended state; tries to prevent
   // entering deeper sleep states that we cannot come back from.
@@ -226,26 +226,33 @@ void brighten_screens(
     }
     else
     {
+      DISPLAY_BRIGHTNESS _displayBrightness{
+          DISPLAYPOLICY_BOTH, max_brightness, max_brightness};
       if (DWORD ret = NULL, nOutBufferSize = sizeof(_displayBrightness);
-              DeviceIoControl(
-                  monitor,
-                  IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
-                  (DISPLAY_BRIGHTNESS *)&_displayBrightness,
-                  nOutBufferSize,
-                  NULL,
-                  0,
-                  &ret,
-                  NULL))
+          DeviceIoControl(
+              monitor,
+              IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
+              (DISPLAY_BRIGHTNESS *)&_displayBrightness,
+              nOutBufferSize,
+              NULL,
+              0,
+              &ret,
+              NULL))
       {
 
         ns::log("Increase display brightness.");
-        //# Turn the monitor on (work-around for laptop monitors turning off
-        // when
-        // suspended).
-
+        // Turn the monitor on (work-around for laptop monitors turning off
+        // when suspended).
         ns::log("Power up display.");
         constexpr auto POWER_ON = -1;
         SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
+      }
+      else
+      {
+        ns::log(ns::format(
+            "Failed to increase display brightness (error #{e}).",
+            GetLastError()));
+        ns::log("Failure powering up display.");
       }
     }
     // else ...???
