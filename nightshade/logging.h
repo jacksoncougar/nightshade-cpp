@@ -69,6 +69,13 @@ void format_(
   offset = end;
 }
 
+void format_(
+    std::stringstream &ss,
+    std::string &format_template,
+    size_t &offset)
+{
+}
+
 
 template <typename T, typename... Ts>
 std::string format(std::string format_template, T &&arg, Ts &&... args)
