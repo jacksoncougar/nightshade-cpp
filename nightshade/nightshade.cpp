@@ -226,9 +226,23 @@ void brighten_screens(
     }
     else
     {
+      std::array<std::uint8_t, 256> brightness_level_values;
+      DWORD total_brightness_levels;
+      DeviceIoControl(
+          monitor,
+          IOCTL_VIDEO_QUERY_SUPPORTED_BRIGHTNESS,
+          nullptr,
+          0,
+          &brightness_level_values,
+          256,
+          &total_brightness_levels,
+          NULL);
+      max_brightness = brightness_level_values[total_brightness_levels - 1];
+
       DISPLAY_BRIGHTNESS _displayBrightness{
           DISPLAYPOLICY_BOTH, max_brightness, max_brightness};
-      if (DWORD ret = NULL, nOutBufferSize = sizeof(_displayBrightness);
+
+      if (DWORD ret, nOutBufferSize = sizeof(_displayBrightness);
           DeviceIoControl(
               monitor,
               IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
@@ -246,6 +260,9 @@ void brighten_screens(
         ns::log("Power up display.");
         constexpr auto POWER_ON = -1;
         SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
+
+        SetThreadExecutionState(
+            ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
       }
       else
       {
@@ -402,7 +419,7 @@ int main(int argc, char *argv[])
   bool supports_power_off = false;
   DWORD max;
   if (DWORD current; supports_power_off = GetVCPFeatureAndVCPFeatureReply(
-                         monitors[1], 0xD6, nullptr, &current, &max))
+                         monitors[0], 0xD6, nullptr, &current, &max))
   {
     ns::log("Supports power control.");
   }
