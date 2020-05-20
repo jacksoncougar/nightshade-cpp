@@ -35,6 +35,9 @@ std::thread worker;
 std::mutex m;
 std::condition_variable cv;
 
+std::chrono::minutes focus_duration(3);
+std::chrono::minutes break_duration(1);
+
 bool worker_should_terminate = false;
 
 boost::asio::io_context io_context;
@@ -66,11 +69,11 @@ void process_heartbeat(
   if (bytes_transferred && rtime != stime)
   {
     synchronized = true;
-    ns::log("Recieved synchronization message.");
+    ns::log("Received synchronization message.");
   }
   else
   {
-    ns::log("Recieved my own synchronization message.");
+    ns::log("Received my own synchronization message.");
     return udp_socket.async_receive_from(
         boost::asio::buffer(recieve_buffer), local_endpoint, process_heartbeat);
   }
@@ -281,8 +284,8 @@ auto sheduler(
     brighten_screens(
         monitors, hWnd, hShell, supports_hw_power_off, max_brightness);
 
-    // wait for some time and continue -- or exit thread when signalled.
-    if (cv.wait_for(lock, std::chrono::minutes(20), []() {
+    // wait for some time and continue -- or exit thread when signaled.
+    if (cv.wait_for(lock, focus_duration, []() {
           return worker_should_terminate;
         }))
     {
@@ -306,7 +309,7 @@ auto sheduler(
     else
     {
       ns::log("Waiting for sleep timer.");
-      if (cv.wait_for(lock, std::chrono::minutes(4), []() {
+      if (cv.wait_for(lock, break_duration, []() {
             return worker_should_terminate;
           }))
       {
