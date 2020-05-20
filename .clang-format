@@ -3,6 +3,8 @@ BasedOnStyle: LLVM
 AlignAfterOpenBracket: AlwaysBreak
 BinPackArguments: 'false'
 BinPackParameters: 'false'
+AllowAllArgumentsOnNextLine: 'false'
+AllowAllParametersOfDeclarationOnNextLine: 'false'
 ConstructorInitializerAllOnOneLineOrOnePerLine: 'true'
 BreakBeforeBraces: Allman
 
