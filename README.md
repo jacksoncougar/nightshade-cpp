@@ -25,7 +25,7 @@ or feel overworked this might be the solution for you.
 
 # Demo
 
-[ coming soon ]
+[![nightshade-cpp demo video](https://img.youtube.com/vi/xcMDlMT4uXc/0.jpg)](https://www.youtube.com/watch?v=xcMDlMT4uXc)
 
 ## Dependencies
 
