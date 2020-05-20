@@ -50,7 +50,8 @@ boost::array<char, 128> recieve_buffer;
 std::chrono::system_clock::time_point stime;
 
 auto remote_endpoint = boost::asio::ip::udp::endpoint(
-    boost::asio::ip::address_v4::broadcast(), 4000);
+    boost::asio::ip::address_v4::broadcast(),
+    4000);
 
 auto local_endpoint =
     boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 4000);
@@ -75,7 +76,9 @@ void process_heartbeat(
   {
     ns::log("Received my own synchronization message.");
     return udp_socket.async_receive_from(
-        boost::asio::buffer(recieve_buffer), local_endpoint, process_heartbeat);
+        boost::asio::buffer(recieve_buffer),
+        local_endpoint,
+        process_heartbeat);
   }
 }
 
@@ -114,11 +117,6 @@ auto darken_screens(
   {
     for (auto monitor : monitors)
     {
-      DISPLAY_BRIGHTNESS _displayBrightness{
-          DISPLAYPOLICY_BOTH, min_brightness, min_brightness};
-
-      DWORD nOutBufferSize = sizeof(_displayBrightness);
-      DWORD ret = NULL;
 
       if (supports_hw_power_off)
       {
@@ -134,6 +132,28 @@ auto darken_screens(
       }
       else
       {
+        std::array<std::uint8_t, 256> brightness_level_values;
+        DWORD total_brightness_levels;
+        DeviceIoControl(
+            monitor,
+            IOCTL_VIDEO_QUERY_SUPPORTED_BRIGHTNESS,
+            nullptr,
+            0,
+            &brightness_level_values,
+            256,
+            &total_brightness_levels,
+            NULL);
+        auto min_brightness =
+            brightness_level_values[total_brightness_levels - 1];
+
+        DISPLAY_BRIGHTNESS _displayBrightness{
+            DISPLAYPOLICY_BOTH,
+            min_brightness,
+            min_brightness};
+
+        DWORD nOutBufferSize = sizeof(_displayBrightness);
+        DWORD ret = NULL;
+
         if (DeviceIoControl(
                 monitor,
                 IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS,
@@ -243,7 +263,9 @@ void brighten_screens(
       max_brightness = brightness_level_values[total_brightness_levels - 1];
 
       DISPLAY_BRIGHTNESS _displayBrightness{
-          DISPLAYPOLICY_BOTH, max_brightness, max_brightness};
+          DISPLAYPOLICY_BOTH,
+          max_brightness,
+          max_brightness};
 
       if (DWORD ret, nOutBufferSize = sizeof(_displayBrightness);
           DeviceIoControl(
@@ -299,7 +321,11 @@ auto sheduler(
     }
 
     brighten_screens(
-        monitors, hWnd, hShell, supports_hw_power_off, max_brightness);
+        monitors,
+        hWnd,
+        hShell,
+        supports_hw_power_off,
+        max_brightness);
 
     // wait for some time and continue -- or exit thread when signaled.
     if (cv.wait_for(lock, focus_duration, []() {
@@ -316,7 +342,11 @@ auto sheduler(
     // - When the OS is suspended we wait until the OS resumes.
 
     auto result = darken_screens(
-        monitors, hWnd, hShell, supports_hw_power_off, min_brightness);
+        monitors,
+        hWnd,
+        hShell,
+        supports_hw_power_off,
+        min_brightness);
 
     if (result == DARKEN_RESULT::SUSPEND_OS)
     {
@@ -358,9 +388,12 @@ bool query_monitors(HMONITOR Arg1, HDC Arg2, LPRECT Arg3, LPARAM Arg4)
 
     bool supports_power_off = false;
     DWORD max;
-    if (DWORD current;
-        supports_power_off = GetVCPFeatureAndVCPFeatureReply(
-            pMonitors->hPhysicalMonitor, 0xD6, nullptr, &current, &max))
+    if (DWORD current; supports_power_off = GetVCPFeatureAndVCPFeatureReply(
+                           pMonitors->hPhysicalMonitor,
+                           0xD6,
+                           nullptr,
+                           &current,
+                           &max))
     {
       ns::log("Supports power control.");
     }
@@ -422,7 +455,11 @@ int main(int argc, char *argv[])
   bool supports_power_off = false;
   DWORD max;
   if (DWORD current; supports_power_off = GetVCPFeatureAndVCPFeatureReply(
-                         monitors[0], 0xD6, nullptr, &current, &max))
+                         monitors[0],
+                         0xD6,
+                         nullptr,
+                         &current,
+                         &max))
   {
     ns::log("Supports power control.");
   }
@@ -430,7 +467,9 @@ int main(int argc, char *argv[])
   // Set the shutdown privilege for this process.
   {
     if (HANDLE token; OpenProcessToken(
-            GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &token))
     {
       LUID luid;
       LookupPrivilegeValue(nullptr, SE_SHUTDOWN_NAME, &luid);
@@ -486,7 +525,9 @@ int main(int argc, char *argv[])
     // Listen for a heartbeat over the network.
 
     udp_socket.async_receive_from(
-        boost::asio::buffer(recieve_buffer), local_endpoint, process_heartbeat);
+        boost::asio::buffer(recieve_buffer),
+        local_endpoint,
+        process_heartbeat);
     io_context.run(); // execution on this thread will poll here until a
                       // heartbeat is heard...
     io_context.restart();
