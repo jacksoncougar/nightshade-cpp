@@ -36,8 +36,8 @@ std::mutex m;
 std::condition_variable cv;
 std::condition_variable sleep_timer_set;
 
-std::chrono::minutes focus_duration(1);
-std::chrono::seconds break_duration(20);
+std::chrono::minutes focus_duration(20);
+std::chrono::minutes break_duration(4);
 
 bool worker_should_terminate = false;
 
