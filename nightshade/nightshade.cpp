@@ -56,7 +56,7 @@ auto local_endpoint =
     boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 4000);
 
 std::atomic<bool> synchronized = false;
-std::atomic<bool> suspended = false;
+bool suspended = false;
 
 void process_heartbeat(
     const boost::system::error_code &error, // Result of operation.
@@ -321,7 +321,7 @@ auto sheduler(
     if (result == DARKEN_RESULT::SUSPEND_OS)
     {
       ns::log("Waiting until computer wakes up.");
-      cv.wait(lock, []() { return !suspended.load(); });
+      cv.wait(lock, []() { return !suspended; });
     }
     else
     {
