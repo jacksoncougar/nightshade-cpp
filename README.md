@@ -11,12 +11,32 @@ or feel overworked this might be the solution for you.
 <i style="font-size:xx-small">ask your doctor if this executable is right for you</i>
 </blockquote>
 
+## Highlights
+
+- Encourages break taking and multitasking by turning off all monitors after 20 minutes; then automatically turning them back on after 4 minutes.
+- Multiple computers can be synchronized across a local network to encourage break-taking at the same time.
+
+## Implementation Details
+
+- Win32 power management APIs and the [VESA Monitor Control Command Set (MCCS)](https://en.wikipedia.org/wiki/Monitor_Control_Command_Set) are used to find and control the attached displays.
+- Uses boost::asio to synchronize multiple nightshade clients across the local network using a UDP broadcast mechanism.
+- Uses synchronization mechanisms to handle timers -- results in zero CPU utilization between timer events.
+- Multi-threaded design.
+
+# Demo
+
+[ coming soon ]
+
+## Dependencies
+
+- Boost (asio)
+
 ## TODO:
 
-- [ ] Multi-monitor support
-- [ ] Add program options
+- [x] Multi-monitor support
+- [ ] Program options
 - [ ] Customizable durations
-- [ ] System Events
+- [ ] Events
 
 
 ## Bugs/Broken Behaviours
