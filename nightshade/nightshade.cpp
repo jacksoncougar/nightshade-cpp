@@ -377,6 +377,8 @@ auto sheduler(
             return worker_should_terminate;
           }))
       {
+        die = true;
+        notify_thread.join();
         return; // exit thread
       }
       die = true;
