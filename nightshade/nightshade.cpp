@@ -34,9 +34,10 @@ HANDLE timer = CreateWaitableTimer(nullptr, true, nullptr);
 std::thread worker;
 std::mutex m;
 std::condition_variable cv;
+std::condition_variable sleep_timer_set;
 
-std::chrono::minutes focus_duration(3);
-std::chrono::minutes break_duration(1);
+std::chrono::minutes focus_duration(1);
+std::chrono::seconds break_duration(20);
 
 bool worker_should_terminate = false;
 
@@ -177,10 +178,22 @@ auto darken_screens(
   }
   else
   {
-    auto minutes = [](long long x) { return -x * 60 * 10'000'000ll; };
+    auto minutes = [](auto &&time) {
+      using T = std::decay_t<decltype(time)>;
+      if constexpr (std::is_convertible_v<T, long long>)
+        return -static_cast<long long>(time) * 60 * 10'000'000ll;
+      else if constexpr (std::is_same_v<T, std::chrono::minutes>)
+        return -static_cast<std::chrono::minutes>(time).count() * 60 *
+               10'000'000ll;
+      else if constexpr (std::is_same_v<T, std::chrono::seconds>)
+        return -static_cast<std::chrono::seconds>(time).count() * 10'000'000ll;
+      else
+        static_assert(false, "Cannot convert given valuetype into minutes");
+    };
 
     LARGE_INTEGER duration;
-    duration.QuadPart = minutes(4);
+    auto t = break_duration.count();
+    duration.QuadPart = minutes(break_duration);
 
     if (constexpr auto RUN_ONCE = 0;
         !SetWaitableTimer(timer, &duration, RUN_ONCE, nullptr, nullptr, true))
@@ -188,21 +201,30 @@ auto darken_screens(
       ns::log("Failure set wait timer (error #{e}).", GetLastError());
     }
 
+    if (!SetThreadExecutionState(ES_CONTINUOUS))
+    {
+      ns::log("Failure setting execution state.");
+    }
+
     // Create a new thread to handle wake-up.
     std::thread([]() {
-      ns::log(__func__);
+      ns::log("wake_timer_thread");
+
       if (!(WaitForSingleObject(timer, INFINITE) == WAIT_OBJECT_0))
       {
         ns::log("Failure wait on timer.");
       }
-
       // Wake up laptop monitors
       if (!SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED))
       {
         ns::log("Failure setting execution state.");
       }
+      ns::log("Wait timer expired");
       suspended = false;
+      cv.notify_all();
     }).detach();
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
     // Tell OS we need to keep executing in suspended state; attempts to avoid
     // entering deeper sleep states.
@@ -210,6 +232,7 @@ auto darken_screens(
     {
       ns::log("Failure setting execution state.");
     }
+    // hack
 
     suspended = true;
     SetSuspendState(false, false, false);
@@ -283,11 +306,12 @@ void brighten_screens(
         // Turn the monitor on (work-around for laptop monitors turning off
         // when suspended).
         ns::log("Power up display.");
-        constexpr auto POWER_ON = -1;
-        SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
 
         SetThreadExecutionState(
             ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+
+        constexpr auto POWER_ON = -1;
+        SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
       }
       else
       {
@@ -313,8 +337,6 @@ auto sheduler(
   {
     std::unique_lock<std::mutex> lock(m);
 
-    SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
-
     if (!synchronized)
     {
       broadcast_synchronization_message();
@@ -327,12 +349,38 @@ auto sheduler(
         supports_hw_power_off,
         max_brightness);
 
-    // wait for some time and continue -- or exit thread when signaled.
-    if (cv.wait_for(lock, focus_duration, []() {
-          return worker_should_terminate;
-        }))
     {
-      return; // exit thread
+      // This code tries to froce the monitor to stay on without user
+      // interaction when returning from sleep. Does this by turning on the
+      // monitor every second...
+    
+        bool die = false;
+      auto notify_thread = std::thread([&die]() {
+        while (!die)
+        {
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+          cv.notify_all();
+        }
+      });
+
+      // wait for some time and continue -- or exit thread when signaled.
+      if (cv.wait_for(lock, focus_duration, []() {
+            ns::log("waiting...");
+            constexpr auto POWER_ON = -1;
+            SendMessage(
+                HWND_BROADCAST,
+                WM_SYSCOMMAND,
+                SC_MONITORPOWER,
+                POWER_ON);
+
+            SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
+            return worker_should_terminate;
+          }))
+      {
+        return; // exit thread
+      }
+      die = true;
+      notify_thread.join();
     }
 
     // Screen can be darkened by turning off monitors or suspending the OS

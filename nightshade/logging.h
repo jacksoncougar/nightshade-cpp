@@ -21,6 +21,7 @@ template <typename... T> void log(T... x)
 {
   std::ostringstream ss;
   time_t t = std::time(0);
+  ss << std::setw(10) << std::this_thread::get_id() << " ";
   ss << std::setw(10) << std::put_time(std::localtime(&t), "%H-%M-%S: ")
      << std::left;
   (ss << ... << (x));
