@@ -34,9 +34,10 @@ HANDLE timer = CreateWaitableTimer(nullptr, true, nullptr);
 std::thread worker;
 std::mutex m;
 std::condition_variable cv;
+std::condition_variable sleep_timer_set;
 
-std::chrono::minutes focus_duration(3);
-std::chrono::minutes break_duration(1);
+std::chrono::minutes focus_duration(1);
+std::chrono::seconds break_duration(20);
 
 bool worker_should_terminate = false;
 
@@ -50,7 +51,8 @@ boost::array<char, 128> recieve_buffer;
 std::chrono::system_clock::time_point stime;
 
 auto remote_endpoint = boost::asio::ip::udp::endpoint(
-    boost::asio::ip::address_v4::broadcast(), 4000);
+    boost::asio::ip::address_v4::broadcast(),
+    4000);
 
 auto local_endpoint =
     boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::any(), 4000);
@@ -75,7 +77,9 @@ void process_heartbeat(
   {
     ns::log("Received my own synchronization message.");
     return udp_socket.async_receive_from(
-        boost::asio::buffer(recieve_buffer), local_endpoint, process_heartbeat);
+        boost::asio::buffer(recieve_buffer),
+        local_endpoint,
+        process_heartbeat);
   }
 }
 
@@ -115,7 +119,9 @@ auto darken_screens(
     for (auto monitor : monitors)
     {
       DISPLAY_BRIGHTNESS _displayBrightness{
-          DISPLAYPOLICY_BOTH, min_brightness, min_brightness};
+          DISPLAYPOLICY_BOTH,
+          min_brightness,
+          min_brightness};
 
       DWORD nOutBufferSize = sizeof(_displayBrightness);
       DWORD ret = NULL;
@@ -157,10 +163,22 @@ auto darken_screens(
   }
   else
   {
-    auto minutes = [](long long x) { return -x * 60 * 10'000'000ll; };
+    auto minutes = [](auto &&time) {
+      using T = std::decay_t<decltype(time)>;
+      if constexpr (std::is_convertible_v<T, long long>)
+        return -static_cast<long long>(time) * 60 * 10'000'000ll;
+      else if constexpr (std::is_same_v<T, std::chrono::minutes>)
+        return -static_cast<std::chrono::minutes>(time).count() * 60 *
+               10'000'000ll;
+      else if constexpr (std::is_same_v<T, std::chrono::seconds>)
+        return -static_cast<std::chrono::seconds>(time).count() * 10'000'000ll;
+      else
+        static_assert(false, "Cannot convert given valuetype into minutes");
+    };
 
     LARGE_INTEGER duration;
-    duration.QuadPart = minutes(4);
+    auto t = break_duration.count();
+    duration.QuadPart = minutes(break_duration);
 
     if (constexpr auto RUN_ONCE = 0;
         !SetWaitableTimer(timer, &duration, RUN_ONCE, nullptr, nullptr, true))
@@ -168,21 +186,30 @@ auto darken_screens(
       ns::log("Failure set wait timer (error #{e}).", GetLastError());
     }
 
+    if (!SetThreadExecutionState(ES_CONTINUOUS))
+    {
+      ns::log("Failure setting execution state.");
+    }
+
     // Create a new thread to handle wake-up.
     std::thread([]() {
-      ns::log(__func__);
+      ns::log("wake_timer_thread");
+
       if (!(WaitForSingleObject(timer, INFINITE) == WAIT_OBJECT_0))
       {
         ns::log("Failure wait on timer.");
       }
-
       // Wake up laptop monitors
       if (!SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED))
       {
         ns::log("Failure setting execution state.");
       }
+      ns::log("Wait timer expired");
       suspended = false;
+      cv.notify_all();
     }).detach();
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
     // Tell OS we need to keep executing in suspended state; attempts to avoid
     // entering deeper sleep states.
@@ -190,6 +217,7 @@ auto darken_screens(
     {
       ns::log("Failure setting execution state.");
     }
+    // hack
 
     suspended = true;
     SetSuspendState(false, false, false);
@@ -243,7 +271,9 @@ void brighten_screens(
       max_brightness = brightness_level_values[total_brightness_levels - 1];
 
       DISPLAY_BRIGHTNESS _displayBrightness{
-          DISPLAYPOLICY_BOTH, max_brightness, max_brightness};
+          DISPLAYPOLICY_BOTH,
+          max_brightness,
+          max_brightness};
 
       if (DWORD ret, nOutBufferSize = sizeof(_displayBrightness);
           DeviceIoControl(
@@ -261,11 +291,12 @@ void brighten_screens(
         // Turn the monitor on (work-around for laptop monitors turning off
         // when suspended).
         ns::log("Power up display.");
-        constexpr auto POWER_ON = -1;
-        SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
 
         SetThreadExecutionState(
             ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+
+        constexpr auto POWER_ON = -1;
+        SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
       }
       else
       {
@@ -291,22 +322,50 @@ auto sheduler(
   {
     std::unique_lock<std::mutex> lock(m);
 
-    SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
-
     if (!synchronized)
     {
       broadcast_synchronization_message();
     }
 
     brighten_screens(
-        monitors, hWnd, hShell, supports_hw_power_off, max_brightness);
+        monitors,
+        hWnd,
+        hShell,
+        supports_hw_power_off,
+        max_brightness);
 
-    // wait for some time and continue -- or exit thread when signaled.
-    if (cv.wait_for(lock, focus_duration, []() {
-          return worker_should_terminate;
-        }))
     {
-      return; // exit thread
+      // This code tries to froce the monitor to stay on without user
+      // interaction when returning from sleep. Does this by turning on the
+      // monitor every second...
+    
+        bool die = false;
+      auto notify_thread = std::thread([&die]() {
+        while (!die)
+        {
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+          cv.notify_all();
+        }
+      });
+
+      // wait for some time and continue -- or exit thread when signaled.
+      if (cv.wait_for(lock, focus_duration, []() {
+            ns::log("waiting...");
+            constexpr auto POWER_ON = -1;
+            SendMessage(
+                HWND_BROADCAST,
+                WM_SYSCOMMAND,
+                SC_MONITORPOWER,
+                POWER_ON);
+
+            SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
+            return worker_should_terminate;
+          }))
+      {
+        return; // exit thread
+      }
+      die = true;
+      notify_thread.join();
     }
 
     // Screen can be darkened by turning off monitors or suspending the OS
@@ -316,7 +375,11 @@ auto sheduler(
     // - When the OS is suspended we wait until the OS resumes.
 
     auto result = darken_screens(
-        monitors, hWnd, hShell, supports_hw_power_off, min_brightness);
+        monitors,
+        hWnd,
+        hShell,
+        supports_hw_power_off,
+        min_brightness);
 
     if (result == DARKEN_RESULT::SUSPEND_OS)
     {
@@ -358,9 +421,12 @@ bool query_monitors(HMONITOR Arg1, HDC Arg2, LPRECT Arg3, LPARAM Arg4)
 
     bool supports_power_off = false;
     DWORD max;
-    if (DWORD current;
-        supports_power_off = GetVCPFeatureAndVCPFeatureReply(
-            pMonitors->hPhysicalMonitor, 0xD6, nullptr, &current, &max))
+    if (DWORD current; supports_power_off = GetVCPFeatureAndVCPFeatureReply(
+                           pMonitors->hPhysicalMonitor,
+                           0xD6,
+                           nullptr,
+                           &current,
+                           &max))
     {
       ns::log("Supports power control.");
     }
@@ -422,7 +488,11 @@ int main(int argc, char *argv[])
   bool supports_power_off = false;
   DWORD max;
   if (DWORD current; supports_power_off = GetVCPFeatureAndVCPFeatureReply(
-                         monitors[0], 0xD6, nullptr, &current, &max))
+                         monitors[0],
+                         0xD6,
+                         nullptr,
+                         &current,
+                         &max))
   {
     ns::log("Supports power control.");
   }
@@ -430,7 +500,9 @@ int main(int argc, char *argv[])
   // Set the shutdown privilege for this process.
   {
     if (HANDLE token; OpenProcessToken(
-            GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &token))
     {
       LUID luid;
       LookupPrivilegeValue(nullptr, SE_SHUTDOWN_NAME, &luid);
@@ -486,7 +558,9 @@ int main(int argc, char *argv[])
     // Listen for a heartbeat over the network.
 
     udp_socket.async_receive_from(
-        boost::asio::buffer(recieve_buffer), local_endpoint, process_heartbeat);
+        boost::asio::buffer(recieve_buffer),
+        local_endpoint,
+        process_heartbeat);
     io_context.run(); // execution on this thread will poll here until a
                       // heartbeat is heard...
     io_context.restart();
