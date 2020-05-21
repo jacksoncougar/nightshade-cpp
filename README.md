@@ -7,10 +7,6 @@ a while then turning them back on after you've taken a break. Rinse and repeat.
 If you've ever struggled with taking breaks, found secondary tasks lagging behind, 
 or feel overworked this might be the solution for you.
 
-<blockquote>
-<i style="font-size:xx-small">ask your doctor if this executable is right for you</i>
-</blockquote>
-
 
 ## Demo
 
@@ -28,20 +24,33 @@ or feel overworked this might be the solution for you.
 - Uses synchronization mechanisms to handle timers -- results in zero CPU utilization between timer events.
 - Multi-threaded design.
 
+## Usage
+
+    nightshade [OPTION...]
+
+    -d, --debug              Enable console window
+    -f, --focus [=arg(=20)]  Number of minutes in a work interval (default: 20)
+
+    -b, --break [=arg(=20)]  Number of minutes in a break (default: 4)
+    -h, --help               Print usage
 
 ## Dependencies
 
-- Boost (asio)
+- Boost (asio) - 
+- cxxopts - https://github.com/jarro2783/cxxopts
 
 ## TODO:
 
-- [x] Multi-monitor support
-- [ ] Program options
-- [ ] Customizable durations
+- [ ] Windows Logging
 - [ ] Events
+
+- [x] Multi-monitor support
+- [x] Program options
+- [x] Customizable durations
 
 
 ## Bugs/Broken Behaviours
 
 - [ ] Should only power on monitors that have been powered off by the program.
+- [ ] Multiple clients should synchronize smallest time remaining.
 

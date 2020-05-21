@@ -24,6 +24,8 @@
 #include <vector>
 #include <winioctl.h>
 
+#include "cxxopts.hpp"
+
 #include "logging.h"
 #include "nightshade.h"
 
@@ -353,8 +355,8 @@ auto sheduler(
       // This code tries to froce the monitor to stay on without user
       // interaction when returning from sleep. Does this by turning on the
       // monitor every second...
-    
-        bool die = false;
+
+      bool die = false;
       auto notify_thread = std::thread([&die]() {
         while (!die)
         {
@@ -456,6 +458,30 @@ bool query_monitors(HMONITOR Arg1, HDC Arg2, LPRECT Arg3, LPARAM Arg4)
 
 int main(int argc, char *argv[])
 {
+  // load command line arguments
+
+  // clang-format off
+  cxxopts::Options options("nightshade", "Pomodoro-technique productivity aid.");
+     options.add_options()
+      ("d,debug", "Enable console window", cxxopts::value<bool>()->default_value("false")->implicit_value("true")) 
+      ("f,focus", "Number of minutes in a work interval", cxxopts::value<int>()->default_value("20")->implicit_value("20"))
+      ("b,break", "Number of minutes in a break",  cxxopts::value<int>()->default_value("4")->implicit_value("20"))
+      ("h,help", "Print usage");
+  // clang-format on
+
+  auto result = options.parse(argc, argv);
+
+  if (result.count("help"))
+  {
+    std::cout << options.help() << std::endl;
+    exit(0);
+  }
+
+  focus_duration = std::chrono::minutes(result["focus"].as<int>());
+  break_duration = std::chrono::minutes(result["break"].as<int>());
+
+  ns::log("Using focus duration of ", focus_duration.count(), " minutes.");
+  ns::log("Using break duration of ", break_duration.count(), " minutes.");
 
   udp_socket.open(udp::v4(), error);
   udp_socket.set_option(boost::asio::socket_base::broadcast(true));
@@ -468,8 +494,10 @@ int main(int argc, char *argv[])
   {
     throw;
   }
-
-  // ShowWindow(hWnd, SW_HIDE);
+  if (result["debug"].as<bool>())
+  {
+    ShowWindow(hWnd, SW_HIDE);
+  }
   auto hShell = FindWindow("Shell_TrayWnd", NULL);
 
   std::vector<HANDLE> monitors;
