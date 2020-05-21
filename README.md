@@ -36,8 +36,8 @@ or feel overworked this might be the solution for you.
 
 ## Dependencies
 
-- Boost (asio) - 
-- cxxopts - https://github.com/jarro2783/cxxopts
+- Boost (asio) - https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio.html (external)
+- cxxopts - https://github.com/jarro2783/cxxopts (git submodule)
 
 ## TODO:
 
