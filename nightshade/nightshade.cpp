@@ -33,13 +33,15 @@ using udp = boost::asio::ip::udp;
 
 HANDLE timer = CreateWaitableTimer(nullptr, true, nullptr);
 
+UINT msg;
+
 std::thread worker;
 std::mutex m;
 std::condition_variable cv;
 std::condition_variable sleep_timer_set;
 
-std::chrono::minutes focus_duration(20);
-std::chrono::minutes break_duration(4);
+std::chrono::minutes focus_duration(1);
+std::chrono::minutes break_duration(1);
 
 bool worker_should_terminate = false;
 
@@ -313,7 +315,7 @@ void brighten_screens(
             ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
 
         constexpr auto POWER_ON = -1;
-        SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
+        SendMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, POWER_ON);
       }
       else
       {
@@ -352,7 +354,7 @@ auto sheduler(
         max_brightness);
 
     {
-      // This code tries to froce the monitor to stay on without user
+      // This code tries to force the monitor to stay on without user
       // interaction when returning from sleep. Does this by turning on the
       // monitor every second...
 
@@ -366,12 +368,10 @@ auto sheduler(
       });
 
       // wait for some time and continue -- or exit thread when signaled.
-      if (cv.wait_for(lock, focus_duration, []() {
+      if (cv.wait_for(lock, focus_duration, [hWnd]() {
             ns::log("waiting...");
             constexpr auto POWER_ON = -1;
-            SendMessage(
-                HWND_BROADCAST,
-                WM_SYSCOMMAND,
+            SendMessage(hWnd, WM_SYSCOMMAND,
                 SC_MONITORPOWER,
                 POWER_ON);
 
@@ -379,10 +379,12 @@ auto sheduler(
             return worker_should_terminate;
           }))
       {
+        ns::log("die...");
         die = true;
         notify_thread.join();
         return; // exit thread
       }
+      ns::log("die...");
       die = true;
       notify_thread.join();
     }
@@ -489,6 +491,8 @@ int main(int argc, char *argv[])
   udp_socket.bind(local_endpoint);
 
   auto hWnd = GetConsoleWindow();
+
+  msg = RegisterWindowMessage("who dis");
 
   if (!timer)
   {
